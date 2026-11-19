@@ -8,7 +8,8 @@ description: Set up, run and manage a personal Telegram bot that watches BookMyS
 This skill installs a small Python bot (in `app/` next to this file) that the **user owns and runs on their own machine with their own Telegram bot**. Nothing is shared with whoever published this skill.
 
 What the bot does once running (all inside Telegram):
-- `/track`: user pastes a BookMyShow movie link, then picks a date, a theatre (or types part of a name if bookings aren't open yet), showtimes, seat class, rows (`H-M`, `J,K,L` or `any`), number of tickets and a check interval (5/15/30/60 min).
+- `/track` with a **movie link**: the user picks a date, a theatre (or types part of a name if bookings aren't open yet), showtimes, seat class, rows (`H-M`, `J,K,L` or `any`), number of tickets and a check interval (5/15/30/60 min).
+- `/track` with a **cinema link** (e.g. `https://in.bookmyshow.com/cinemas/CHEN/<cinema>/buytickets/<CODE>/<YYYYMMDD>`): the theatre and date come from the link, and the user pastes the movie's link or types its name. The bot alerts when that movie is added at that theatre and bookable. Name search only covers the ~10-movie "now showing" and "upcoming" city lists, so the movie link is the reliable option.
 - On each check it reads BookMyShow's showtimes data for seat-class availability. For shows that pass, it reads the seat map and only alerts when the preferred rows have enough free seats, listing side-by-side seats first (e.g. "Row J: seats 13–15 together") with a direct seat-layout link.
 - `/list`, `/check`, `/stop`, `/cancel`, `/myid`. Trackers are saved in `trackers.json` and survive restarts.
 

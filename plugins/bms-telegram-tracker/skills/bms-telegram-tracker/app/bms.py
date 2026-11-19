@@ -116,6 +116,61 @@ def parse_url(url: str) -> Target:
     return Target(event_code=event, region_slug=region, url_slug=slug)
 
 
+@dataclass
+class Cinema:
+    region_slug: str
+    venue_code: str
+    venue_name: str  # best guess from the URL slug
+    date_code: str
+
+
+def region_slug_for_code(code: str) -> str:
+    code = code.upper()
+    for slug, (rc, canonical, *_) in REGIONS.items():
+        if rc == code:
+            return canonical
+    return code.lower()
+
+
+def parse_cinema_url(url: str) -> Cinema:
+    """https://in.bookmyshow.com/cinemas/CHEN/rohini-silver-screens-koyambedu/buytickets/RSSC/20261120"""
+    parts = urlparse(url.strip()).path.strip("/").split("/")
+    if "cinemas" not in parts:
+        raise BMSError("That doesn't look like a BookMyShow cinema link.")
+    i = parts.index("cinemas")
+    rest = parts[i + 1:]
+    if len(rest) < 2:
+        raise BMSError("Couldn't read the city and cinema from that link.")
+    region_code, slug = rest[0], rest[1]
+    venue = ""
+    if "buytickets" in rest:
+        j = rest.index("buytickets")
+        venue = rest[j + 1] if j + 1 < len(rest) else ""
+    date = next((p for p in rest if re.fullmatch(r"\d{8}", p)), "")
+    if not venue:
+        raise BMSError("Couldn't find the cinema code in that link — open the cinema's showtimes page and copy that link.")
+    return Cinema(region_slug=region_slug_for_code(region_code), venue_code=venue,
+                  venue_name=slug.replace("-", " ").title(), date_code=date)
+
+
+def search_movies(region_slug: str, query: str) -> list[tuple[str, str, str]]:
+    """Best-effort name search over the city's 'now showing' and 'upcoming' lists.
+    Returns [(display name, url slug, event code)]. These lists are partial."""
+    q = re.sub(r"[^a-z0-9]+", " ", query.lower()).strip()
+    found: dict[str, tuple[str, str, str]] = {}
+    for page in (f"explore/movies-{region_slug}", f"explore/upcoming-movies-{region_slug}"):
+        try:
+            html = requests.get(f"https://in.bookmyshow.com/{page}", impersonate="chrome", timeout=25).text
+        except Exception:
+            continue
+        for slug, code in re.findall(r"/(?:%s/movies|movies/%s)/([a-z0-9-]+)/(ET\d{8,})" % (region_slug, region_slug), html):
+            name = slug.replace("-", " ")
+            words = name.split()
+            if q and all(any(nw.startswith(w) for nw in words) for w in q.split()):
+                found.setdefault(code, (name.title(), slug, code))
+    return list(found.values())
+
+
 def fetch(target: Target, date_code: str = "") -> Snapshot:
     code, slug, lat, lon, geohash = target.region
     headers = {

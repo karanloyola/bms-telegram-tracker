@@ -3,6 +3,7 @@
 A Claude Code skill that sets up **your own** Telegram bot to watch BookMyShow and ping you when seats open up, filtered by:
 
 - movie, city and date (including dates where booking hasn't opened yet)
+- or a **cinema link**: get alerted when a given movie is added at that theatre and bookings open
 - theatre and showtime(s)
 - seat class (e.g. ELITE / BUDGET)
 - **preferred rows** (`H-M`, `J,K,L`, or any) and **number of tickets**, preferring side-by-side seats

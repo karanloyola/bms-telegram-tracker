@@ -44,7 +44,7 @@ logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s: %(message)s", le
 logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger("bmsbot")
 
-(URL, DATE, THEATRE, THEATRE_TEXT, SHOW, CATEGORY, ROWS, TICKETS, FREQ, CONFIRM) = range(10)
+(URL, DATE, THEATRE, THEATRE_TEXT, SHOW, CATEGORY, ROWS, TICKETS, FREQ, CONFIRM, MOVIE) = range(11)
 
 
 # ── storage ──────────────────────────────────────────────────────────
@@ -119,6 +119,18 @@ def describe(t: dict) -> str:
             f"⏱ Every {t['interval']} min")
 
 
+def update_tracker(tid: str, **fields) -> bool:
+    """Re-read the store and update just this tracker, so concurrent checks don't
+    overwrite each other (no await between load and save, so it's atomic in asyncio).
+    Returns False if the tracker was removed meanwhile."""
+    data = load()
+    if tid not in data:
+        return False
+    data[tid].update(fields)
+    save(data)
+    return True
+
+
 # ── checking ─────────────────────────────────────────────────────────
 async def run_check(app: Application, tid: str, manual: bool = False) -> str | None:
     data = load()
@@ -136,14 +148,14 @@ async def run_check(app: Application, tid: str, manual: bool = False) -> str | N
     try:
         snap = await asyncio.to_thread(bms.fetch, target, t["date"])
     except Exception as e:
-        t["fails"] = t.get("fails", 0) + 1
-        log.warning("check %s failed (%s): %s", tid, t["fails"], e)
-        if t["fails"] == 3:
+        fails = t.get("fails", 0) + 1
+        if not update_tracker(tid, fails=fails):
+            return None  # stopped while we were checking
+        log.warning("check %s failed (%s): %s", tid, fails, e)
+        if fails == 3:
             await app.bot.send_message(t["chat_id"], f"⚠️ Couldn't reach BookMyShow 3 times in a row for "
                                        f"<b>{esc(t['movie'])}</b> ({esc(e)}). I'll keep trying.",
                                        parse_mode=ParseMode.HTML)
-        data[tid] = t
-        save(data)
         return f"⚠️ Check failed: {e}"
 
     hits = [(s, c) for s, c in matching(t, snap) if c.available]
@@ -153,8 +165,8 @@ async def run_check(app: Application, tid: str, manual: bool = False) -> str | N
     keys = sorted({f"{s.session_id}|{c.name}" for s, c in hits})
     new = set(keys) - set(t.get("last_keys", []))
     t.update(fails=0, last_keys=keys, last_check=datetime.now().isoformat(timespec="seconds"))
-    data[tid] = t
-    save(data)
+    if not update_tracker(tid, fails=0, last_keys=keys, last_check=t["last_check"]):
+        return None  # stopped while we were checking
 
     if new:
         await app.bot.send_message(t["chat_id"], alert_text(t, target, hits, new, seat_info),
@@ -282,12 +294,17 @@ async def track(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
     ctx.user_data["t"] = {}
     await update.message.reply_text(
-        "Send me the BookMyShow movie link.\n\n"
-        "e.g. https://in.bookmyshow.com/movies/chennai/jailer-2/ET00518674\n\n/cancel to abort")
+        "Send me a BookMyShow link:\n\n"
+        "• a <b>movie</b> link, e.g. https://in.bookmyshow.com/movies/chennai/jailer-2/ET00518674\n"
+        "• or a <b>cinema</b> link to watch one theatre, e.g. "
+        "https://in.bookmyshow.com/cinemas/CHEN/rohini-silver-screens-koyambedu/buytickets/RSSC/20261120\n\n"
+        "/cancel to abort", parse_mode=ParseMode.HTML, disable_web_page_preview=True)
     return URL
 
 
 async def got_url(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if "/cinemas/" in update.message.text:
+        return await _got_cinema(update, ctx)
     try:
         target = bms.parse_url(update.message.text)
     except bms.BMSError as e:
@@ -312,6 +329,81 @@ async def got_url(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
            "(✅ booking open, 🔒 not yet) — or type one like <code>28-11</code> or <code>2026-11-28</code>.")
     await msg.edit_text(txt, parse_mode=ParseMode.HTML, reply_markup=Kb(rows) if rows else None)
     return DATE
+
+
+# ── cinema-link flow: theatre fixed, user names the movie ────────────
+async def _got_cinema(update: Update, ctx):
+    try:
+        cin = bms.parse_cinema_url(update.message.text)
+    except bms.BMSError as e:
+        await update.message.reply_text(f"❌ {e} Try again or /cancel.")
+        return URL
+    ctx.user_data["cinema"] = cin
+    when = f" on {bms.pretty_date(cin.date_code)}" if cin.date_code else ""
+    await update.message.reply_text(
+        f"🏛 <b>{esc(cin.venue_name)}</b>{esc(when)}\n\nWhich movie should I watch for here? "
+        "Paste its BookMyShow movie link (most reliable), or type its name.",
+        parse_mode=ParseMode.HTML)
+    return MOVIE
+
+
+async def got_movie_text(update: Update, ctx):
+    cin: bms.Cinema = ctx.user_data["cinema"]
+    text = update.message.text.strip()
+    if "bookmyshow.com" in text:
+        try:
+            target = bms.parse_url(text)
+        except bms.BMSError as e:
+            await update.message.reply_text(f"❌ {e} Try again or /cancel.")
+            return MOVIE
+        msg = await update.message.reply_text("🔎 Checking…")
+        return await _cinema_movie_chosen(msg, ctx, target.event_code, target.url_slug)
+    msg = await update.message.reply_text("🔎 Searching…")
+    hits = await asyncio.to_thread(bms.search_movies, cin.region_slug, text)
+    if not hits:
+        await msg.edit_text("Couldn't find that in BookMyShow's movie lists for this city. "
+                            "Paste the movie's BookMyShow link instead.")
+        return MOVIE
+    if len(hits) == 1:
+        return await _cinema_movie_chosen(msg, ctx, hits[0][2], hits[0][1])
+    ctx.user_data["movie_hits"] = {code: slug for _, slug, code in hits}
+    rows = [[Btn(name[:60], callback_data=f"m:{code}")] for name, _, code in hits[:8]]
+    await msg.edit_text("Which one?", reply_markup=Kb(rows))
+    return MOVIE
+
+
+async def got_movie_btn(update: Update, ctx):
+    q = update.callback_query
+    await q.answer()
+    code = q.data[2:]
+    return await _cinema_movie_chosen(q.message, ctx, code, ctx.user_data.get("movie_hits", {}).get(code, ""))
+
+
+async def _cinema_movie_chosen(msg, ctx, event_code, slug):
+    cin: bms.Cinema = ctx.user_data["cinema"]
+    target = bms.Target(event_code=event_code, region_slug=cin.region_slug, url_slug=slug)
+    try:
+        snap = await asyncio.to_thread(bms.fetch, target, cin.date_code)
+    except bms.BMSError as e:
+        await msg.edit_text(f"❌ {e}. Try again or /cancel.")
+        return MOVIE
+    date = cin.date_code or datetime.now().strftime("%Y%m%d")
+    shows = [s for s in snap.shows if s.venue_code == cin.venue_code and s.date_code in ("", date)]
+    venue_name = shows[0].venue_name if shows else cin.venue_name
+    ctx.user_data["t"] = {"event": event_code, "region": cin.region_slug, "slug": slug, "movie": snap.movie,
+                          "date": date, "venue_code": cin.venue_code, "venue_name": venue_name}
+    if shows:
+        ctx.user_data["picked"] = set()
+        ctx.user_data["venue_shows"] = shows
+        await msg.edit_text(f"✅ {snap.movie} is already listed at {venue_name} on {bms.pretty_date(date)}.")
+        msg = await msg.reply_text("…")
+        await _show_picker(msg, ctx)
+        return SHOW
+    await msg.edit_text(f"⏳ <b>{esc(snap.movie)}</b> isn't listed at {esc(venue_name)} on "
+                        f"{esc(bms.pretty_date(date))} yet — I'll alert you when it's added and bookable.",
+                        parse_mode=ParseMode.HTML)
+    msg = await msg.reply_text("…")
+    return await _ask_window(msg, ctx)
 
 
 def _parse_date(text: str) -> str | None:
@@ -659,6 +751,8 @@ def main():
             TICKETS: [CallbackQueryHandler(got_tickets, pattern=r"^n:")],
             FREQ: [CallbackQueryHandler(got_freq, pattern=r"^f:")],
             CONFIRM: [CallbackQueryHandler(got_confirm, pattern=r"^ok:")],
+            MOVIE: [CallbackQueryHandler(got_movie_btn, pattern=r"^m:"),
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, got_movie_text)],
         },
         fallbacks=[CommandHandler("cancel", cancel), CommandHandler("track", track)],
         conversation_timeout=timedelta(minutes=15),

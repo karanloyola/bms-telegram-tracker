@@ -1,6 +1,6 @@
 {
   "name": "bms-telegram-tracker",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Personal Telegram bot that alerts you when BookMyShow seats open up — by date, theatre, showtime, seat class, rows and ticket count.",
   "license": "MIT",
   "keywords": ["bookmyshow", "telegram", "tickets", "alerts"]
