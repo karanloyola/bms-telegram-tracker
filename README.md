@@ -25,11 +25,11 @@ Everything runs on your machine with your own bot token. No third-party server i
 ### Option A: Ask Claude Code
 Paste this into Claude Code:
 
-> Install the bms-telegram-tracker skill from https://github.com/OWNER/bms-telegram-tracker and set up my BookMyShow ticket tracker.
+> Install the bms-telegram-tracker skill from https://github.com/karanloyola/bms-telegram-tracker and set up my BookMyShow ticket tracker.
 
 ### Option B: Plugin commands
 ```
-/plugin marketplace add OWNER/bms-telegram-tracker
+/plugin marketplace add karanloyola/bms-telegram-tracker
 /plugin install bms-telegram-tracker@bms-telegram-tracker
 ```
 Then ask Claude: "set up my BookMyShow ticket tracker".
