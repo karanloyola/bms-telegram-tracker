@@ -1,0 +1,16 @@
+{
+  "name": "bms-telegram-tracker",
+  "owner": {
+    "name": "bms-telegram-tracker"
+  },
+  "metadata": {
+    "description": "Personal BookMyShow \u2192 Telegram ticket alerts for Claude Code."
+  },
+  "plugins": [
+    {
+      "name": "bms-telegram-tracker",
+      "source": "./plugins/bms-telegram-tracker",
+      "description": "Personal Telegram bot that alerts you when BookMyShow seats open up \u2014 by date, theatre, showtime, seat class, rows and ticket count."
+    }
+  ]
+}
